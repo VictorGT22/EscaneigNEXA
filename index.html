@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Escaneig NEXA (mòbil)</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Arial, sans-serif; background: #f0f2f5; color: #1a2a3a; }
+  header { background: #1a3a5c; color: #fff; padding: 14px 16px; font-size: 16px; font-weight: 700; }
+  .wrap { padding: 14px; max-width: 480px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #e4e8ee; border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 10px; font-size: 11px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: 0.05em; }
+  #box { width: 100%; aspect-ratio: 1/1; background: #000; border-radius: 8px; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; }
+  #box video, #box canvas { width: 100% !important; height: 100% !important; object-fit: cover; }
+  .off { color: #999; font-size: 12px; text-align: center; padding: 12px; }
+  .btns { display: flex; gap: 8px; margin-top: 10px; }
+  button { flex: 1; font-size: 14px; font-weight: 600; padding: 11px; border: 1px solid #e4e8ee; border-radius: 8px; background: #fff; color: #555; font-family: inherit; }
+  button.primary { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
+  button.danger { color: #cc4444; border-color: #f0c0c0; }
+  button:disabled { opacity: 0.5; }
+  input[type=text] { width: 100%; font-size: 14px; padding: 10px; border: 1px solid #e4e8ee; border-radius: 8px; font-family: inherit; }
+  .manual { display: flex; gap: 6px; margin-top: 8px; }
+  .manual input { flex: 1; }
+  .manual button { flex: 0 0 auto; padding: 10px 16px; }
+  .llista { margin-top: 6px; max-height: 260px; overflow-y: auto; }
+  .fila { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f2f5; font-size: 13px; }
+  .fila .ref { font-family: monospace; font-weight: 700; color: #2a5aaa; }
+  .fila .ok { color: #2a8a4a; font-size: 12px; }
+  .fila .err { color: #cc4444; font-size: 12px; }
+  .buit { text-align: center; color: #bbb; padding: 20px; font-size: 13px; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 20px); background: #1a3a5c; color: #fff; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; opacity: 0; transition: 0.2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<header>Escaneig NEXA — mòbil</header>
+<div class="wrap">
+
+  <div class="card">
+    <h4>El teu nom (queda desat en aquest mòbil)</h4>
+    <input type="text" id="usuari" placeholder="Ex: Victor" oninput="desarUsuari()">
+  </div>
+
+  <div class="card">
+    <h4>Escàner</h4>
+    <div id="box"><div class="off">Pulsa "Iniciar càmera"</div></div>
+    <div class="btns">
+      <button class="primary" id="btn-start" onclick="iniciar()">Iniciar càmera</button>
+      <button class="danger" id="btn-stop" onclick="aturar()" disabled>Aturar</button>
+    </div>
+    <div style="font-size:11px;color:#999;margin-top:10px">O introdueix la referència a mà:</div>
+    <form class="manual" onsubmit="event.preventDefault();afegirManual();">
+      <input type="text" id="manual" placeholder="Ref. o QR..." autocomplete="off">
+      <button type="submit" class="primary">+ Afegir</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h4>Escanejats en aquesta sessió</h4>
+    <div class="llista" id="llista"><div class="buit">Encara no has escanejat res.</div></div>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+  // ── Configura aquí la URL de l'exec/dev del ERP NEXA ──
+  var API_URL = 'https://script.google.com/macros/s/AKfycbz08C6cBVv_1Fil9vzGdY0OKnGwplDCEFqyH5A6Huvv/dev';
+
+  var scanner = null;
+  var ultim = { ref: '', ts: 0 };
+  var sessio = [];
+  var jsonpSeq = 0;
+
+  function gid(id){ return document.getElementById(id); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function toast(msg){ var t=gid('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},1400); }
+  function beep(){ try { var a=new (window.AudioContext||window.webkitAudioContext)(); var o=a.createOscillator(); var g=a.createGain(); o.connect(g); g.connect(a.destination); o.frequency.value=880; g.gain.value=0.1; o.start(); setTimeout(function(){o.stop();a.close();},110); } catch(e){} }
+
+  function desarUsuari(){ localStorage.setItem('esc_usuari', gid('usuari').value); }
+  (function(){ gid('usuari').value = localStorage.getItem('esc_usuari') || ''; })();
+
+  function parsear(txt){
+    try { var o = JSON.parse(txt); if (o && o.r) return { ref: String(o.r), desc: String(o.d||'') }; } catch(e){}
+    return { ref: String(txt||'').trim(), desc: '' };
+  }
+
+  function renderLlista(){
+    var wrap = gid('llista');
+    if (!sessio.length){ wrap.innerHTML = '<div class="buit">Encara no has escanejat res.</div>'; return; }
+    wrap.innerHTML = sessio.slice().reverse().map(function(it){
+      return '<div class="fila"><span><span class="ref">'+esc(it.ref)+'</span> '+(it.desc?('— '+esc(it.desc)):'')+'</span>'
+        + '<span class="'+(it.ok?'ok':'err')+'">'+(it.ok?'✓ afegit':'✗ error')+'</span></div>';
+    }).join('');
+  }
+
+  // Crida JSONP a l'API del ERP (evita problemes de CORS)
+  function jsonp(params, cb){
+    var name = 'jsonp_cb_' + (jsonpSeq++);
+    params.callback = name;
+    var qs = Object.keys(params).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(params[k]); }).join('&');
+    var script = document.createElement('script');
+    var neteja = function(){ delete window[name]; script.remove(); };
+    window[name] = function(res){ neteja(); cb(null, res); };
+    script.onerror = function(){ neteja(); cb(new Error('No s\'ha pogut contactar amb el ERP')); };
+    script.src = API_URL + '?api=escaneig&' + qs;
+    document.body.appendChild(script);
+  }
+
+  function afegir(ref, desc){
+    ref = String(ref||'').trim(); if (!ref) return;
+    var usuari = gid('usuari').value.trim();
+    var entrada = { ref: ref, desc: desc||'', ok: null };
+    sessio.push(entrada); renderLlista();
+    jsonp({ accio: 'afegir', ref: ref, quant: 1, usuari: usuari }, function(err, res){
+      entrada.ok = !err && res && res.ok;
+      if (entrada.ok){ toast(ref + ' afegit ✓'); beep(); }
+      else { toast('Error: ' + (err ? err.message : (res && res.error) || 'desconegut')); }
+      renderLlista();
+    });
+  }
+
+  window.afegirManual = function(){
+    var inp = gid('manual');
+    var v = inp.value.trim(); if (!v) return;
+    var d = parsear(v);
+    afegir(d.ref, d.desc);
+    inp.value=''; inp.focus();
+  };
+
+  window.iniciar = function(){
+    if (scanner) return;
+    if (!window.Html5Qrcode){ toast('Llibreria no carregada'); return; }
+    if (!gid('usuari').value.trim()){ toast('Posa el teu nom abans de començar'); return; }
+    gid('box').innerHTML = '';
+    scanner = new Html5Qrcode('box');
+    scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 240, height: 240 } },
+      function(text){
+        var now = Date.now();
+        if (text === ultim.ref && now - ultim.ts < 1500) return;
+        ultim = { ref: text, ts: now };
+        var d = parsear(text);
+        afegir(d.ref, d.desc);
+      },
+      function(){ /* errors de lectura, ignorar */ }
+    ).then(function(){
+      gid('btn-start').disabled = true; gid('btn-stop').disabled = false;
+    }).catch(function(err){
+      toast('No es pot accedir a la càmera'); scanner = null;
+      gid('box').innerHTML = '<div class="off">Error: ' + esc(String(err||'')) + '</div>';
+    });
+  };
+
+  window.aturar = function(){
+    if (!scanner) return;
+    scanner.stop().then(function(){
+      try { scanner.clear(); } catch(e){}
+      scanner = null;
+      gid('box').innerHTML = '<div class="off">Càmera aturada</div>';
+      gid('btn-start').disabled = false; gid('btn-stop').disabled = true;
+    }).catch(function(){});
+  };
+</script>
+</body>
+</html>
