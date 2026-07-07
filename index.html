@@ -19,15 +19,23 @@
   button.primary { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
   button.danger { color: #cc4444; border-color: #f0c0c0; }
   button:disabled { opacity: 0.5; }
+  .modes { display: flex; gap: 6px; margin-bottom: 12px; }
+  .modes button { font-size: 12px; padding: 10px 6px; }
+  .modes button.on { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
+  .stock-box { text-align: center; padding: 10px; border-radius: 8px; margin-top: 8px; font-size: 13px; }
+  .stock-box.info { background: #eef4ff; color: #1a3a5c; }
+  .stock-box.warn { background: #fff5e6; color: #995500; }
   input[type=text] { width: 100%; font-size: 14px; padding: 10px; border: 1px solid #e4e8ee; border-radius: 8px; font-family: inherit; }
   .manual { display: flex; gap: 6px; margin-top: 8px; }
   .manual input { flex: 1; }
   .manual button { flex: 0 0 auto; padding: 10px 16px; }
   .llista { margin-top: 6px; max-height: 260px; overflow-y: auto; }
-  .fila { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f2f5; font-size: 13px; }
+  .fila { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f2f5; font-size: 13px; }
+  .fila .info { flex: 1; min-width: 0; }
   .fila .ref { font-family: monospace; font-weight: 700; color: #2a5aaa; }
   .fila .ok { color: #2a8a4a; font-size: 12px; }
   .fila .err { color: #cc4444; font-size: 12px; }
+  .fila .del { flex: 0 0 auto; width: 26px; height: 26px; border: 1px solid #f0c0c0; background: #fff; color: #cc4444; border-radius: 6px; font-size: 14px; font-weight: 700; padding: 0; line-height: 1; }
   .buit { text-align: center; color: #bbb; padding: 20px; font-size: 13px; }
   .toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 20px); background: #1a3a5c; color: #fff; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; opacity: 0; transition: 0.2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translate(-50%, 0); }
@@ -40,6 +48,15 @@
   <div class="card">
     <h4>El teu nom (queda desat en aquest mòbil)</h4>
     <input type="text" id="usuari" placeholder="Ex: Victor" oninput="desarUsuari()">
+  </div>
+
+  <div class="card">
+    <h4>Què vols fer en escanejar?</h4>
+    <div class="modes">
+      <button type="button" id="mode-afegir"   onclick="triarMode('afegir')">📦 Demanar</button>
+      <button type="button" id="mode-consultar" onclick="triarMode('consultar')">🔍 Consultar stock</button>
+      <button type="button" id="mode-retirar"  onclick="triarMode('retirar')">📤 Retirar peça</button>
+    </div>
   </div>
 
   <div class="card">
@@ -70,9 +87,12 @@
   var API_URL = 'https://script.google.com/macros/s/AKfycbz08C6cBVv_1Fil9vzGdY0OKnGwplDCEFqyH5A6Huvv/dev';
 
   var scanner = null;
-  var ultim = { ref: '', ts: 0 };
-  var sessio = [];
+  var sessio = {};       // clau = ref en majúscules -> { ref, desc, ok, missatge, comptador, ordre }
+  var pendents = {};     // clau = ref en majúscules -> true mentre s'espera resposta del servidor
+  var recents = {};      // clau = ref en majúscules -> timestamp de l'últim cop confirmat
+  var ordreSeq = 0;
   var jsonpSeq = 0;
+  var COOLDOWN_MS = 3000; // temps mínim entre dos escanejos del mateix codi
 
   function gid(id){ return document.getElementById(id); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -87,12 +107,29 @@
     return { ref: String(txt||'').trim(), desc: '' };
   }
 
+  var mode = 'afegir';
+  var ETIQUETES_MODE = { afegir: 'Demanar', consultar: 'Consultar stock', retirar: 'Retirar peça' };
+
+  window.triarMode = function(m){
+    mode = m;
+    ['afegir','consultar','retirar'].forEach(function(k){ gid('mode-'+k).classList.toggle('on', k===m); });
+  };
+  triarMode('afegir');
+
   function renderLlista(){
     var wrap = gid('llista');
-    if (!sessio.length){ wrap.innerHTML = '<div class="buit">Encara no has escanejat res.</div>'; return; }
-    wrap.innerHTML = sessio.slice().reverse().map(function(it){
-      return '<div class="fila"><span><span class="ref">'+esc(it.ref)+'</span> '+(it.desc?('— '+esc(it.desc)):'')+'</span>'
-        + '<span class="'+(it.ok?'ok':'err')+'">'+(it.ok?'✓ afegit':'✗ error')+'</span></div>';
+    var items = Object.keys(sessio).map(function(k){ return sessio[k]; }).sort(function(a,b){ return b.ordre - a.ordre; });
+    if (!items.length){ wrap.innerHTML = '<div class="buit">Encara no has escanejat res.</div>'; return; }
+    wrap.innerHTML = items.map(function(it){
+      var estat;
+      if (it.ok === null) estat = '<span>...</span>';
+      else if (!it.ok) estat = '<span class="err">✗ '+esc(it.missatge||'error')+'</span>';
+      else estat = '<span class="ok">'+esc(it.missatge)+(it.comptador>1?' ×'+it.comptador:'')+'</span>';
+      var potEliminar = it.ok === true;
+      return '<div class="fila">'
+        + '<span class="info"><span class="ref">'+esc(it.ref)+'</span> '+(it.desc?('— '+esc(it.desc)):'')+'<br>'+estat+'</span>'
+        + (potEliminar ? '<button type="button" class="del" onclick="eliminarFila(\''+esc(it.key)+'\')" title="Eliminar aquest escaneig">×</button>' : '')
+        + '</div>';
     }).join('');
   }
 
@@ -109,24 +146,70 @@
     document.body.appendChild(script);
   }
 
-  function afegir(ref, desc){
+  function processar(ref, desc){
     ref = String(ref||'').trim(); if (!ref) return;
+    var key = ref.toUpperCase();
+    var ara = Date.now();
+    if (pendents[key]) return; // ja hi ha una petició en curs per aquesta ref, ignorar
+    if (recents[key] && ara - recents[key] < COOLDOWN_MS){ toast(ref + ' — ja escanejat, espera un moment'); return; }
+    pendents[key] = true;
+
     var usuari = gid('usuari').value.trim();
-    var entrada = { ref: ref, desc: desc||'', ok: null };
-    sessio.push(entrada); renderLlista();
-    jsonp({ accio: 'afegir', ref: ref, quant: 1, usuari: usuari }, function(err, res){
-      entrada.ok = !err && res && res.ok;
-      if (entrada.ok){ toast(ref + ' afegit ✓'); beep(); }
-      else { toast('Error: ' + (err ? err.message : (res && res.error) || 'desconegut')); }
-      renderLlista();
-    });
+    var entrada = sessio[key];
+    if (!entrada){ entrada = { key: key, ref: ref, desc: desc||'', ok: null, comptador: 0, ordre: ordreSeq++, mode: mode }; sessio[key] = entrada; }
+    else { entrada.ordre = ordreSeq++; entrada.ok = null; entrada.mode = mode; }
+    renderLlista();
+
+    function acabat(){ delete pendents[key]; recents[key] = Date.now(); renderLlista(); }
+
+    if (mode === 'afegir') {
+      jsonp({ accio: 'afegir', ref: ref, quant: 1, usuari: usuari }, function(err, res){
+        entrada.ok = !!(!err && res && res.ok);
+        if (entrada.ok){ entrada.comptador++; entrada.missatge = '✓ demanat'; toast(ref + ' demanat ✓'); beep(); }
+        else { entrada.missatge = (err ? err.message : (res && res.error)) || 'desconegut'; toast('Error: ' + entrada.missatge); }
+        acabat();
+      });
+    } else if (mode === 'consultar') {
+      jsonp({ accio: 'consultar', ref: ref }, function(err, res){
+        entrada.ok = !!(!err && res && res.ok && res.trobat);
+        if (entrada.ok){ entrada.desc = res.desc; entrada.comptador++; entrada.missatge = 'Stock: ' + res.stock; toast(ref + ' → stock ' + res.stock); beep(); }
+        else { entrada.missatge = err ? err.message : (res && res.ok ? 'No trobat a l\'inventari' : (res && res.error)) || 'desconegut'; toast('Error: ' + entrada.missatge); }
+        acabat();
+      });
+    } else if (mode === 'retirar') {
+      jsonp({ accio: 'retirar', ref: ref, quant: 1, usuari: usuari }, function(err, res){
+        entrada.ok = !!(!err && res && res.ok);
+        if (entrada.ok){ entrada.desc = res.desc; entrada.comptador++; entrada.missatge = '✓ retirat (stock ' + res.stockNou + ')'; toast(ref + ' retirat, stock: ' + res.stockNou); beep(); }
+        else { entrada.missatge = err ? err.message : (res && res.error) || 'desconegut'; toast('Error: ' + entrada.missatge); }
+        acabat();
+      });
+    }
   }
+
+  // Elimina un escaneig fet per error. Desfà l'efecte al servidor segons quin
+  // mode es va fer servir per afegir-lo (demanar → treu de la comanda pendent;
+  // retirar → torna a sumar el stock; consultar → no cal desfer res).
+  window.eliminarFila = function(key){
+    var entrada = sessio[key]; if (!entrada || pendents[key]) return;
+    pendents[key] = true;
+    function fet(){ delete pendents[key]; delete sessio[key]; renderLlista(); }
+    if (entrada.mode === 'afegir') {
+      jsonp({ accio: 'eliminar', ref: entrada.ref }, function(){ toast(entrada.ref + ' eliminat'); fet(); });
+    } else if (entrada.mode === 'retirar') {
+      jsonp({ accio: 'desferRetirar', ref: entrada.ref, quant: entrada.comptador || 1 }, function(err, res){
+        toast(entrada.ref + ' eliminat' + (res && res.stockNou != null ? ' (stock ' + res.stockNou + ')' : ''));
+        fet();
+      });
+    } else {
+      fet();
+    }
+  };
 
   window.afegirManual = function(){
     var inp = gid('manual');
     var v = inp.value.trim(); if (!v) return;
     var d = parsear(v);
-    afegir(d.ref, d.desc);
+    processar(d.ref, d.desc);
     inp.value=''; inp.focus();
   };
 
@@ -140,11 +223,8 @@
       { facingMode: 'environment' },
       { fps: 10, qrbox: { width: 240, height: 240 } },
       function(text){
-        var now = Date.now();
-        if (text === ultim.ref && now - ultim.ts < 1500) return;
-        ultim = { ref: text, ts: now };
         var d = parsear(text);
-        afegir(d.ref, d.desc);
+        processar(d.ref, d.desc);
       },
       function(){ /* errors de lectura, ignorar */ }
     ).then(function(){
