@@ -338,11 +338,12 @@
     gid('box').innerHTML = '';
     scanner = new Html5Qrcode('box', { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false });
     scanner.start(
-      // Demanem resolució alta perquè els QR petits es vegin amb prou detall
-      { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      { facingMode: 'environment' }, // aquest objecte només pot tenir 1 clau
       {
         fps: 12,
         qrbox: { width: 280, height: 280 },
+        // Resolució alta perquè els QR petits es vegin amb prou detall
+        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
         // Fa servir el detector natiu del navegador quan hi és disponible (molt més fiable amb codis petits/allunyats)
         experimentalFeatures: { useBarCodeDetectorIfSupported: true }
       },
