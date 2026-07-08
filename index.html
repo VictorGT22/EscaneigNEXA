@@ -19,9 +19,16 @@
   button.primary { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
   button.danger { color: #cc4444; border-color: #f0c0c0; }
   button:disabled { opacity: 0.5; }
-  .modes { display: flex; gap: 6px; margin-bottom: 12px; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
   .modes button { font-size: 12px; padding: 10px 6px; }
   .modes button.on { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
+  .overlay-stock { position: fixed; inset: 0; background: rgba(10,20,40,0.55); z-index: 999; display: none; align-items: center; justify-content: center; padding: 20px; }
+  .overlay-stock.show { display: flex; }
+  .stock-modal { background: #fff; border-radius: 14px; padding: 18px; width: 100%; max-width: 340px; }
+  .stock-modal h4 { margin: 0 0 10px; font-size: 14px; color: #1a2a3a; }
+  .stock-modal .ref-linia { font-size: 14px; }
+  #stock-quant { width: 100%; font-size: 22px; text-align: center; padding: 10px; margin-top: 6px; border: 1px solid #e4e8ee; border-radius: 8px; font-family: inherit; }
+  .stock-label { font-size: 11px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 12px; display: block; }
   .stock-box { text-align: center; padding: 10px; border-radius: 8px; margin-top: 8px; font-size: 13px; }
   .stock-box.info { background: #eef4ff; color: #1a3a5c; }
   .stock-box.warn { background: #fff5e6; color: #995500; }
@@ -53,9 +60,10 @@
   <div class="card">
     <h4>Què vols fer en escanejar?</h4>
     <div class="modes">
-      <button type="button" id="mode-afegir"   onclick="triarMode('afegir')">📦 Demanar</button>
-      <button type="button" id="mode-consultar" onclick="triarMode('consultar')">🔍 Consultar stock</button>
-      <button type="button" id="mode-retirar"  onclick="triarMode('retirar')">📤 Retirar peça</button>
+      <button type="button" id="mode-afegir"      onclick="triarMode('afegir')">📦 Demanar</button>
+      <button type="button" id="mode-consultar"   onclick="triarMode('consultar')">🔍 Consultar stock</button>
+      <button type="button" id="mode-retirar"     onclick="triarMode('retirar')">📤 Retirar peça</button>
+      <button type="button" id="mode-afegirStock" onclick="triarMode('afegirStock')">➕ Afegir stock</button>
     </div>
   </div>
 
@@ -97,7 +105,19 @@
   function gid(id){ return document.getElementById(id); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   function toast(msg){ var t=gid('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},1400); }
-  function beep(){ try { var a=new (window.AudioContext||window.webkitAudioContext)(); var o=a.createOscillator(); var g=a.createGain(); o.connect(g); g.connect(a.destination); o.frequency.value=880; g.gain.value=0.1; o.start(); setTimeout(function(){o.stop();a.close();},110); } catch(e){} }
+  function beep(){
+    try {
+      var a = new (window.AudioContext||window.webkitAudioContext)();
+      var o = a.createOscillator(); var g = a.createGain();
+      o.connect(g); g.connect(a.destination);
+      o.type = 'square'; o.frequency.value = 1000;
+      var ara = a.currentTime, dur = 0.22;
+      g.gain.setValueAtTime(0.6, ara);
+      g.gain.exponentialRampToValueAtTime(0.001, ara + dur); // fade-out per evitar "clic" sec
+      o.start(ara); o.stop(ara + dur);
+      setTimeout(function(){ a.close(); }, (dur*1000) + 50);
+    } catch(e){}
+  }
 
   function desarUsuari(){ localStorage.setItem('esc_usuari', gid('usuari').value); }
   (function(){ gid('usuari').value = localStorage.getItem('esc_usuari') || ''; })();
