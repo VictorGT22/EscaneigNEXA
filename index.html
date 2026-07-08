@@ -15,10 +15,11 @@
   #box video, #box canvas { width: 100% !important; height: 100% !important; object-fit: cover; }
   .off { color: #999; font-size: 12px; text-align: center; padding: 12px; }
   .btns { display: flex; gap: 8px; margin-top: 10px; }
-  button { flex: 1; font-size: 14px; font-weight: 600; padding: 11px; border: 1px solid #e4e8ee; border-radius: 8px; background: #fff; color: #555; font-family: inherit; }
+  button { flex: 1; font-size: 14px; font-weight: 600; padding: 11px; border: 1px solid #e4e8ee; border-radius: 8px; background: #fff; color: #555; font-family: inherit; transition: transform 0.08s, opacity 0.08s; -webkit-tap-highlight-color: transparent; }
   button.primary { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
   button.danger { color: #cc4444; border-color: #f0c0c0; }
   button:disabled { opacity: 0.5; }
+  button:active:not(:disabled) { transform: scale(0.95); opacity: 0.75; }
   .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
   .modes button { font-size: 12px; padding: 10px 6px; }
   .modes button.on { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
@@ -155,19 +156,25 @@
     var items = Object.keys(sessio).map(function(k){ return sessio[k]; }).sort(function(a,b){ return b.ordre - a.ordre; });
     if (!items.length){ wrap.innerHTML = '<div class="buit">Encara no has escanejat res.</div>'; return; }
     wrap.innerHTML = items.map(function(it){
-      var estat;
-      if (it.ok === null) estat = '<span>...</span>';
-      else if (!it.ok) estat = '<span class="err">✗ '+esc(it.missatge||'error')+'</span>';
-      else {
+      var estat, boto = '';
+      if (it.esborrant) {
+        estat = '<span style="color:#999">Eliminant...</span>';
+      } else if (it.ok === null) {
+        estat = '<span>...</span>';
+      } else if (!it.ok) {
+        estat = '<span class="err">✗ '+esc(it.missatge||'error')+'</span>';
+      } else {
         // Per "demanar" cada escaneig val 1 unitat, així que ×N mostra quants cops s'ha demanat.
         // Retirar/afegir stock ja inclouen la quantitat de l'última acció al mateix missatge.
         var n = it.mode === 'afegir' ? it.comptadorAfegir : 0;
         estat = '<span class="ok">'+esc(it.missatge)+(n>1?' ×'+n:'')+'</span>';
+        if (it.comptadorAfegir > 0 || it.comptadorRetirar > 0 || it.totalAfegitStock > 0) {
+          boto = '<button type="button" class="del" onclick="eliminarFila(\''+esc(it.key)+'\')" title="Eliminar aquest escaneig">×</button>';
+        }
       }
-      var potEliminar = it.ok === true && (it.comptadorAfegir > 0 || it.comptadorRetirar > 0 || it.totalAfegitStock > 0);
       return '<div class="fila">'
         + '<span class="info"><span class="ref">'+esc(it.ref)+'</span> '+(it.desc?('— '+esc(it.desc)):'')+'<br>'+estat+'</span>'
-        + (potEliminar ? '<button type="button" class="del" onclick="eliminarFila(\''+esc(it.key)+'\')" title="Eliminar aquest escaneig">×</button>' : '')
+        + boto
         + '</div>';
     }).join('');
   }
@@ -301,6 +308,9 @@
   window.eliminarFila = function(key){
     var entrada = sessio[key]; if (!entrada || pendents[key]) return;
     pendents[key] = true;
+    entrada.esborrant = true;
+    renderLlista(); // feedback immediat: es nota que s'ha premut i que està fent alguna cosa
+
     var tasques = [];
     if (entrada.comptadorAfegir > 0) tasques.push({ accio: 'eliminar', ref: entrada.ref });
     if (entrada.comptadorRetirar > 0) tasques.push({ accio: 'desferRetirar', ref: entrada.ref, quant: entrada.comptadorRetirar });
@@ -326,10 +336,16 @@
     if (!window.Html5Qrcode){ toast('Llibreria no carregada'); return; }
     if (!gid('usuari').value.trim()){ toast('Posa el teu nom abans de començar'); return; }
     gid('box').innerHTML = '';
-    scanner = new Html5Qrcode('box');
+    scanner = new Html5Qrcode('box', { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false });
     scanner.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 240, height: 240 } },
+      // Demanem resolució alta perquè els QR petits es vegin amb prou detall
+      { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      {
+        fps: 12,
+        qrbox: { width: 280, height: 280 },
+        // Fa servir el detector natiu del navegador quan hi és disponible (molt més fiable amb codis petits/allunyats)
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+      },
       function(text){
         var d = parsear(text);
         processar(d.ref, d.desc);
