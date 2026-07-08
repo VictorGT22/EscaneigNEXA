@@ -90,13 +90,13 @@
 
 <div class="overlay-stock" id="stock-overlay">
   <div class="stock-modal">
-    <h4>Quantitat a afegir al stock</h4>
+    <h4 id="stock-titol">Quantitat</h4>
     <div class="ref-linia"><span class="ref" id="stock-ref" style="font-family:monospace;font-weight:700;color:#2a5aaa"></span> <span id="stock-desc"></span></div>
     <label class="stock-label">Quantitat</label>
     <input type="number" id="stock-quant" value="1" min="1" step="1">
     <div class="btns">
-      <button class="danger" onclick="cancelarAfegirStock()">Cancel·lar</button>
-      <button class="primary" onclick="confirmarAfegirStock()">Confirmar</button>
+      <button class="danger" onclick="cancelarQuantitat()">Cancel·lar</button>
+      <button class="primary" onclick="confirmarQuantitat()">Confirmar</button>
     </div>
   </div>
 </div>
@@ -158,7 +158,9 @@
       if (it.ok === null) estat = '<span>...</span>';
       else if (!it.ok) estat = '<span class="err">✗ '+esc(it.missatge||'error')+'</span>';
       else {
-        var n = it.mode === 'afegir' ? it.comptadorAfegir : (it.mode === 'retirar' ? it.comptadorRetirar : 0);
+        // Per "demanar" cada escaneig val 1 unitat, així que ×N mostra quants cops s'ha demanat.
+        // Retirar/afegir stock ja inclouen la quantitat de l'última acció al mateix missatge.
+        var n = it.mode === 'afegir' ? it.comptadorAfegir : 0;
         estat = '<span class="ok">'+esc(it.missatge)+(n>1?' ×'+n:'')+'</span>';
       }
       var potEliminar = it.ok === true && (it.comptadorAfegir > 0 || it.comptadorRetirar > 0 || it.totalAfegitStock > 0);
@@ -191,8 +193,9 @@
     pendents[key] = true;
     beep(); // confirmació immediata de lectura, abans de saber com acaba l'operació
 
-    if (mode === 'afegirStock') {
-      stockPendent = { key: key, ref: ref, desc: desc || '' };
+    if (mode === 'afegirStock' || mode === 'retirar') {
+      stockPendent = { key: key, ref: ref, desc: desc || '', accio: mode };
+      gid('stock-titol').textContent = mode === 'retirar' ? 'Quantitat a retirar' : 'Quantitat a afegir al stock';
       gid('stock-ref').textContent = ref;
       gid('stock-desc').textContent = desc ? ('— ' + desc) : '';
       gid('stock-quant').value = 1;
@@ -223,37 +226,36 @@
         else { entrada.missatge = err ? err.message : (res && res.ok ? 'No trobat a l\'inventari' : (res && res.error)) || 'desconegut'; toast('Error: ' + entrada.missatge); }
         acabat();
       });
-    } else if (mode === 'retirar') {
-      jsonp({ accio: 'retirar', ref: ref, quant: 1, usuari: usuari }, function(err, res){
-        entrada.ok = !!(!err && res && res.ok);
-        if (entrada.ok){ entrada.desc = res.desc; entrada.comptadorRetirar++; entrada.missatge = '✓ retirat (stock ' + res.stockNou + ')'; toast(ref + ' retirat, stock: ' + res.stockNou); }
-        else { entrada.missatge = err ? err.message : (res && res.error) || 'desconegut'; toast('Error: ' + entrada.missatge); }
-        acabat();
-      });
     }
   }
 
-  // Confirmació de quantitat del mode "Afegir stock" (obert des de processar())
-  window.confirmarAfegirStock = function(){
+  // Confirmació de quantitat dels modes "Afegir stock" i "Retirar peça" (oberts des de processar())
+  window.confirmarQuantitat = function(){
     if (!stockPendent) return;
     var quant = parseFloat(gid('stock-quant').value);
     if (isNaN(quant) || quant <= 0){ toast('Posa una quantitat vàlida'); return; }
-    var key = stockPendent.key, ref = stockPendent.ref, desc = stockPendent.desc;
+    var key = stockPendent.key, ref = stockPendent.ref, desc = stockPendent.desc, accio = stockPendent.accio;
     gid('stock-overlay').classList.remove('show');
     stockPendent = null;
 
     var entrada = sessio[key];
-    if (!entrada){ entrada = { key: key, ref: ref, desc: desc, ok: null, comptadorAfegir: 0, comptadorRetirar: 0, totalAfegitStock: 0, ordre: ordreSeq++, mode: 'afegirStock' }; sessio[key] = entrada; }
-    else { entrada.ordre = ordreSeq++; entrada.ok = null; entrada.mode = 'afegirStock'; }
+    if (!entrada){ entrada = { key: key, ref: ref, desc: desc, ok: null, comptadorAfegir: 0, comptadorRetirar: 0, totalAfegitStock: 0, ordre: ordreSeq++, mode: accio }; sessio[key] = entrada; }
+    else { entrada.ordre = ordreSeq++; entrada.ok = null; entrada.mode = accio; }
     renderLlista();
 
-    jsonp({ accio: 'afegirStock', ref: ref, quant: quant }, function(err, res){
+    jsonp({ accio: accio, ref: ref, quant: quant }, function(err, res){
       entrada.ok = !!(!err && res && res.ok);
       if (entrada.ok){
         entrada.desc = res.desc || entrada.desc;
-        entrada.totalAfegitStock = (entrada.totalAfegitStock || 0) + quant;
-        entrada.missatge = '✓ +' + quant + ' stock (ara ' + res.stockNou + ')';
-        toast(ref + ' +' + quant + ' → stock ' + res.stockNou);
+        if (accio === 'retirar'){
+          entrada.comptadorRetirar = (entrada.comptadorRetirar || 0) + quant;
+          entrada.missatge = '✓ retirat ×' + quant + ' (stock ' + res.stockNou + ')';
+          toast(ref + ' -' + quant + ' → stock ' + res.stockNou);
+        } else {
+          entrada.totalAfegitStock = (entrada.totalAfegitStock || 0) + quant;
+          entrada.missatge = '✓ +' + quant + ' stock (ara ' + res.stockNou + ')';
+          toast(ref + ' +' + quant + ' → stock ' + res.stockNou);
+        }
       } else {
         entrada.missatge = (err ? err.message : (res && res.error)) || 'desconegut';
         toast('Error: ' + entrada.missatge);
@@ -262,7 +264,7 @@
     });
   };
 
-  window.cancelarAfegirStock = function(){
+  window.cancelarQuantitat = function(){
     if (stockPendent) delete pendents[stockPendent.key];
     gid('stock-overlay').classList.remove('show');
     stockPendent = null;
