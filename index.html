@@ -94,6 +94,7 @@
     <div class="ref-linia"><span class="ref" id="stock-ref" style="font-family:monospace;font-weight:700;color:#2a5aaa"></span> <span id="stock-desc"></span></div>
     <label class="stock-label">Quantitat</label>
     <input type="number" id="stock-quant" value="1" min="1" step="1">
+    <div id="stock-disponible" style="font-size:12px;color:#999;margin-top:6px;display:none"></div>
     <div class="btns">
       <button class="danger" onclick="cancelarQuantitat()">Cancel·lar</button>
       <button class="primary" onclick="confirmarQuantitat()">Confirmar</button>
@@ -194,13 +195,32 @@
     beep(); // confirmació immediata de lectura, abans de saber com acaba l'operació
 
     if (mode === 'afegirStock' || mode === 'retirar') {
-      stockPendent = { key: key, ref: ref, desc: desc || '', accio: mode };
+      stockPendent = { key: key, ref: ref, desc: desc || '', accio: mode, maxStock: null };
       gid('stock-titol').textContent = mode === 'retirar' ? 'Quantitat a retirar' : 'Quantitat a afegir al stock';
       gid('stock-ref').textContent = ref;
       gid('stock-desc').textContent = desc ? ('— ' + desc) : '';
       gid('stock-quant').value = 1;
+      gid('stock-quant').removeAttribute('max');
       gid('stock-overlay').classList.add('show');
       setTimeout(function(){ var inp = gid('stock-quant'); inp.focus(); inp.select(); }, 50);
+
+      var dispEl = gid('stock-disponible');
+      if (mode === 'retirar') {
+        dispEl.style.display = 'block'; dispEl.textContent = 'Consultant stock disponible...';
+        var stockPendentActual = stockPendent;
+        jsonp({ accio: 'consultar', ref: ref }, function(err, res){
+          if (stockPendent !== stockPendentActual) return; // s'ha cancel·lat o ja s'ha confirmat
+          if (!err && res && res.ok && res.trobat) {
+            stockPendent.maxStock = res.stock;
+            dispEl.textContent = 'Stock disponible: ' + res.stock;
+            gid('stock-quant').setAttribute('max', res.stock);
+          } else {
+            dispEl.textContent = 'No s\'ha pogut consultar el stock disponible';
+          }
+        });
+      } else {
+        dispEl.style.display = 'none';
+      }
       return; // pendents[key] es queda a true fins que es confirmi o cancel·li
     }
 
@@ -233,7 +253,10 @@
   window.confirmarQuantitat = function(){
     if (!stockPendent) return;
     var quant = parseFloat(gid('stock-quant').value);
-    if (isNaN(quant) || quant <= 0){ toast('Posa una quantitat vàlida'); return; }
+    if (isNaN(quant) || quant <= 0){ toast('Posa una quantitat vàlida (més gran que 0)'); return; }
+    if (stockPendent.accio === 'retirar' && stockPendent.maxStock != null && quant > stockPendent.maxStock){
+      toast('Només hi ha ' + stockPendent.maxStock + ' unitats en stock'); return;
+    }
     var key = stockPendent.key, ref = stockPendent.ref, desc = stockPendent.desc, accio = stockPendent.accio;
     gid('stock-overlay').classList.remove('show');
     stockPendent = null;
