@@ -33,7 +33,7 @@
   .stock-box { text-align: center; padding: 10px; border-radius: 8px; margin-top: 8px; font-size: 13px; }
   .stock-box.info { background: #eef4ff; color: #1a3a5c; }
   .stock-box.warn { background: #fff5e6; color: #995500; }
-  input[type=text] { width: 100%; font-size: 14px; padding: 10px; border: 1px solid #e4e8ee; border-radius: 8px; font-family: inherit; }
+  input[type=text], select { width: 100%; font-size: 14px; padding: 10px; border: 1px solid #e4e8ee; border-radius: 8px; font-family: inherit; background: #fff; color: #1a2a3a; }
   .manual { display: flex; gap: 6px; margin-top: 8px; }
   .manual input { flex: 1; }
   .manual button { flex: 0 0 auto; padding: 10px 16px; }
@@ -144,6 +144,7 @@
   }
 
   var mode = 'afegir';
+  var PROJECTE_FIX = '000'; // l'escaneig mòbil sempre imputa al projecte intern 000
 
   window.triarMode = function(m){
     mode = m;
@@ -240,7 +241,7 @@
     function acabat(){ delete pendents[key]; recents[key] = Date.now(); renderLlista(); }
 
     if (mode === 'afegir') {
-      jsonp({ accio: 'afegir', ref: ref, quant: 1, usuari: usuari }, function(err, res){
+      jsonp({ accio: 'afegir', ref: ref, quant: 1, usuari: usuari, projecte: PROJECTE_FIX }, function(err, res){
         entrada.ok = !!(!err && res && res.ok);
         if (entrada.ok){ entrada.comptadorAfegir++; entrada.missatge = '✓ demanat'; toast(ref + ' demanat ✓'); }
         else { entrada.missatge = (err ? err.message : (res && res.error)) || 'desconegut'; toast('Error: ' + entrada.missatge); }
@@ -312,7 +313,7 @@
     renderLlista(); // feedback immediat: es nota que s'ha premut i que està fent alguna cosa
 
     var tasques = [];
-    if (entrada.comptadorAfegir > 0) tasques.push({ accio: 'eliminar', ref: entrada.ref });
+    if (entrada.comptadorAfegir > 0) tasques.push({ accio: 'eliminar', ref: entrada.ref, projecte: PROJECTE_FIX });
     if (entrada.comptadorRetirar > 0) tasques.push({ accio: 'desferRetirar', ref: entrada.ref, quant: entrada.comptadorRetirar });
     if (entrada.totalAfegitStock > 0) tasques.push({ accio: 'retirar', ref: entrada.ref, quant: entrada.totalAfegitStock });
 
@@ -336,15 +337,10 @@
     if (!window.Html5Qrcode){ toast('Llibreria no carregada'); return; }
     if (!gid('usuari').value.trim()){ toast('Posa el teu nom abans de començar'); return; }
     gid('box').innerHTML = '';
-    scanner = new Html5Qrcode('box', { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false });
+    scanner = new Html5Qrcode('box');
     scanner.start(
-      { facingMode: 'environment' }, // aquest objecte només pot tenir 1 clau
-      {
-        fps: 12,
-        qrbox: { width: 280, height: 280 },
-        // Resolució alta perquè els QR petits es vegin amb prou detall
-        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
-      },
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 240, height: 240 } },
       function(text){
         var d = parsear(text);
         processar(d.ref, d.desc);
