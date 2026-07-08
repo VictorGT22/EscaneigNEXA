@@ -124,8 +124,11 @@
       var estat;
       if (it.ok === null) estat = '<span>...</span>';
       else if (!it.ok) estat = '<span class="err">✗ '+esc(it.missatge||'error')+'</span>';
-      else estat = '<span class="ok">'+esc(it.missatge)+(it.comptador>1?' ×'+it.comptador:'')+'</span>';
-      var potEliminar = it.ok === true;
+      else {
+        var n = it.mode === 'afegir' ? it.comptadorAfegir : (it.mode === 'retirar' ? it.comptadorRetirar : 0);
+        estat = '<span class="ok">'+esc(it.missatge)+(n>1?' ×'+n:'')+'</span>';
+      }
+      var potEliminar = it.ok === true && (it.comptadorAfegir > 0 || it.comptadorRetirar > 0);
       return '<div class="fila">'
         + '<span class="info"><span class="ref">'+esc(it.ref)+'</span> '+(it.desc?('— '+esc(it.desc)):'')+'<br>'+estat+'</span>'
         + (potEliminar ? '<button type="button" class="del" onclick="eliminarFila(\''+esc(it.key)+'\')" title="Eliminar aquest escaneig">×</button>' : '')
@@ -153,10 +156,11 @@
     if (pendents[key]) return; // ja hi ha una petició en curs per aquesta ref, ignorar
     if (recents[key] && ara - recents[key] < COOLDOWN_MS){ toast(ref + ' — ja escanejat, espera un moment'); return; }
     pendents[key] = true;
+    beep(); // confirmació immediata de lectura, abans de saber com acaba l'operació
 
     var usuari = gid('usuari').value.trim();
     var entrada = sessio[key];
-    if (!entrada){ entrada = { key: key, ref: ref, desc: desc||'', ok: null, comptador: 0, ordre: ordreSeq++, mode: mode }; sessio[key] = entrada; }
+    if (!entrada){ entrada = { key: key, ref: ref, desc: desc||'', ok: null, comptadorAfegir: 0, comptadorRetirar: 0, ordre: ordreSeq++, mode: mode }; sessio[key] = entrada; }
     else { entrada.ordre = ordreSeq++; entrada.ok = null; entrada.mode = mode; }
     renderLlista();
 
@@ -165,44 +169,43 @@
     if (mode === 'afegir') {
       jsonp({ accio: 'afegir', ref: ref, quant: 1, usuari: usuari }, function(err, res){
         entrada.ok = !!(!err && res && res.ok);
-        if (entrada.ok){ entrada.comptador++; entrada.missatge = '✓ demanat'; toast(ref + ' demanat ✓'); beep(); }
+        if (entrada.ok){ entrada.comptadorAfegir++; entrada.missatge = '✓ demanat'; toast(ref + ' demanat ✓'); }
         else { entrada.missatge = (err ? err.message : (res && res.error)) || 'desconegut'; toast('Error: ' + entrada.missatge); }
         acabat();
       });
     } else if (mode === 'consultar') {
       jsonp({ accio: 'consultar', ref: ref }, function(err, res){
         entrada.ok = !!(!err && res && res.ok && res.trobat);
-        if (entrada.ok){ entrada.desc = res.desc; entrada.comptador++; entrada.missatge = 'Stock: ' + res.stock; toast(ref + ' → stock ' + res.stock); beep(); }
+        if (entrada.ok){ entrada.desc = res.desc; entrada.missatge = 'Stock: ' + res.stock; toast(ref + ' → stock ' + res.stock); }
         else { entrada.missatge = err ? err.message : (res && res.ok ? 'No trobat a l\'inventari' : (res && res.error)) || 'desconegut'; toast('Error: ' + entrada.missatge); }
         acabat();
       });
     } else if (mode === 'retirar') {
       jsonp({ accio: 'retirar', ref: ref, quant: 1, usuari: usuari }, function(err, res){
         entrada.ok = !!(!err && res && res.ok);
-        if (entrada.ok){ entrada.desc = res.desc; entrada.comptador++; entrada.missatge = '✓ retirat (stock ' + res.stockNou + ')'; toast(ref + ' retirat, stock: ' + res.stockNou); beep(); }
+        if (entrada.ok){ entrada.desc = res.desc; entrada.comptadorRetirar++; entrada.missatge = '✓ retirat (stock ' + res.stockNou + ')'; toast(ref + ' retirat, stock: ' + res.stockNou); }
         else { entrada.missatge = err ? err.message : (res && res.error) || 'desconegut'; toast('Error: ' + entrada.missatge); }
         acabat();
       });
     }
   }
 
-  // Elimina un escaneig fet per error. Desfà l'efecte al servidor segons quin
-  // mode es va fer servir per afegir-lo (demanar → treu de la comanda pendent;
-  // retirar → torna a sumar el stock; consultar → no cal desfer res).
+  // Elimina un escaneig fet per error. Desfà cada efecte que realment s'hagi
+  // produït en aquesta referència (pot haver-se demanat I retirat alhora):
+  // treu de la comanda pendent si es va demanar, i torna a sumar exactament
+  // les unitats retirades si es van retirar. Consultar stock no fa res al servidor.
   window.eliminarFila = function(key){
     var entrada = sessio[key]; if (!entrada || pendents[key]) return;
     pendents[key] = true;
-    function fet(){ delete pendents[key]; delete sessio[key]; renderLlista(); }
-    if (entrada.mode === 'afegir') {
-      jsonp({ accio: 'eliminar', ref: entrada.ref }, function(){ toast(entrada.ref + ' eliminat'); fet(); });
-    } else if (entrada.mode === 'retirar') {
-      jsonp({ accio: 'desferRetirar', ref: entrada.ref, quant: entrada.comptador || 1 }, function(err, res){
-        toast(entrada.ref + ' eliminat' + (res && res.stockNou != null ? ' (stock ' + res.stockNou + ')' : ''));
-        fet();
-      });
-    } else {
-      fet();
+    var tasques = [];
+    if (entrada.comptadorAfegir > 0) tasques.push({ accio: 'eliminar', ref: entrada.ref });
+    if (entrada.comptadorRetirar > 0) tasques.push({ accio: 'desferRetirar', ref: entrada.ref, quant: entrada.comptadorRetirar });
+
+    function seguent(){
+      if (!tasques.length){ delete pendents[key]; delete sessio[key]; toast(entrada.ref + ' eliminat'); renderLlista(); return; }
+      jsonp(tasques.shift(), function(){ seguent(); });
     }
+    seguent();
   };
 
   window.afegirManual = function(){
