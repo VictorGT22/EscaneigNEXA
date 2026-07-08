@@ -87,6 +87,19 @@
   </div>
 
 </div>
+
+<div class="overlay-stock" id="stock-overlay">
+  <div class="stock-modal">
+    <h4>Quantitat a afegir al stock</h4>
+    <div class="ref-linia"><span class="ref" id="stock-ref" style="font-family:monospace;font-weight:700;color:#2a5aaa"></span> <span id="stock-desc"></span></div>
+    <label class="stock-label">Quantitat</label>
+    <input type="number" id="stock-quant" value="1" min="1" step="1">
+    <div class="btns">
+      <button class="danger" onclick="cancelarAfegirStock()">Cancel·lar</button>
+      <button class="primary" onclick="confirmarAfegirStock()">Confirmar</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -96,11 +109,12 @@
 
   var scanner = null;
   var sessio = {};       // clau = ref en majúscules -> { ref, desc, ok, missatge, comptador, ordre }
-  var pendents = {};     // clau = ref en majúscules -> true mentre s'espera resposta del servidor
+  var pendents = {};     // clau = ref en majúscules -> true mentre s'espera resposta del servidor (o confirmació de quantitat)
   var recents = {};      // clau = ref en majúscules -> timestamp de l'últim cop confirmat
   var ordreSeq = 0;
   var jsonpSeq = 0;
   var COOLDOWN_MS = 3000; // temps mínim entre dos escanejos del mateix codi
+  var stockPendent = null; // { key, ref, desc } mentre s'espera que l'usuari confirmi la quantitat a afegir
 
   function gid(id){ return document.getElementById(id); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -128,11 +142,10 @@
   }
 
   var mode = 'afegir';
-  var ETIQUETES_MODE = { afegir: 'Demanar', consultar: 'Consultar stock', retirar: 'Retirar peça' };
 
   window.triarMode = function(m){
     mode = m;
-    ['afegir','consultar','retirar'].forEach(function(k){ gid('mode-'+k).classList.toggle('on', k===m); });
+    ['afegir','consultar','retirar','afegirStock'].forEach(function(k){ gid('mode-'+k).classList.toggle('on', k===m); });
   };
   triarMode('afegir');
 
@@ -148,7 +161,7 @@
         var n = it.mode === 'afegir' ? it.comptadorAfegir : (it.mode === 'retirar' ? it.comptadorRetirar : 0);
         estat = '<span class="ok">'+esc(it.missatge)+(n>1?' ×'+n:'')+'</span>';
       }
-      var potEliminar = it.ok === true && (it.comptadorAfegir > 0 || it.comptadorRetirar > 0);
+      var potEliminar = it.ok === true && (it.comptadorAfegir > 0 || it.comptadorRetirar > 0 || it.totalAfegitStock > 0);
       return '<div class="fila">'
         + '<span class="info"><span class="ref">'+esc(it.ref)+'</span> '+(it.desc?('— '+esc(it.desc)):'')+'<br>'+estat+'</span>'
         + (potEliminar ? '<button type="button" class="del" onclick="eliminarFila(\''+esc(it.key)+'\')" title="Eliminar aquest escaneig">×</button>' : '')
@@ -178,9 +191,19 @@
     pendents[key] = true;
     beep(); // confirmació immediata de lectura, abans de saber com acaba l'operació
 
+    if (mode === 'afegirStock') {
+      stockPendent = { key: key, ref: ref, desc: desc || '' };
+      gid('stock-ref').textContent = ref;
+      gid('stock-desc').textContent = desc ? ('— ' + desc) : '';
+      gid('stock-quant').value = 1;
+      gid('stock-overlay').classList.add('show');
+      setTimeout(function(){ var inp = gid('stock-quant'); inp.focus(); inp.select(); }, 50);
+      return; // pendents[key] es queda a true fins que es confirmi o cancel·li
+    }
+
     var usuari = gid('usuari').value.trim();
     var entrada = sessio[key];
-    if (!entrada){ entrada = { key: key, ref: ref, desc: desc||'', ok: null, comptadorAfegir: 0, comptadorRetirar: 0, ordre: ordreSeq++, mode: mode }; sessio[key] = entrada; }
+    if (!entrada){ entrada = { key: key, ref: ref, desc: desc||'', ok: null, comptadorAfegir: 0, comptadorRetirar: 0, totalAfegitStock: 0, ordre: ordreSeq++, mode: mode }; sessio[key] = entrada; }
     else { entrada.ordre = ordreSeq++; entrada.ok = null; entrada.mode = mode; }
     renderLlista();
 
@@ -210,16 +233,53 @@
     }
   }
 
+  // Confirmació de quantitat del mode "Afegir stock" (obert des de processar())
+  window.confirmarAfegirStock = function(){
+    if (!stockPendent) return;
+    var quant = parseFloat(gid('stock-quant').value);
+    if (isNaN(quant) || quant <= 0){ toast('Posa una quantitat vàlida'); return; }
+    var key = stockPendent.key, ref = stockPendent.ref, desc = stockPendent.desc;
+    gid('stock-overlay').classList.remove('show');
+    stockPendent = null;
+
+    var entrada = sessio[key];
+    if (!entrada){ entrada = { key: key, ref: ref, desc: desc, ok: null, comptadorAfegir: 0, comptadorRetirar: 0, totalAfegitStock: 0, ordre: ordreSeq++, mode: 'afegirStock' }; sessio[key] = entrada; }
+    else { entrada.ordre = ordreSeq++; entrada.ok = null; entrada.mode = 'afegirStock'; }
+    renderLlista();
+
+    jsonp({ accio: 'afegirStock', ref: ref, quant: quant }, function(err, res){
+      entrada.ok = !!(!err && res && res.ok);
+      if (entrada.ok){
+        entrada.desc = res.desc || entrada.desc;
+        entrada.totalAfegitStock = (entrada.totalAfegitStock || 0) + quant;
+        entrada.missatge = '✓ +' + quant + ' stock (ara ' + res.stockNou + ')';
+        toast(ref + ' +' + quant + ' → stock ' + res.stockNou);
+      } else {
+        entrada.missatge = (err ? err.message : (res && res.error)) || 'desconegut';
+        toast('Error: ' + entrada.missatge);
+      }
+      delete pendents[key]; recents[key] = Date.now(); renderLlista();
+    });
+  };
+
+  window.cancelarAfegirStock = function(){
+    if (stockPendent) delete pendents[stockPendent.key];
+    gid('stock-overlay').classList.remove('show');
+    stockPendent = null;
+  };
+
   // Elimina un escaneig fet per error. Desfà cada efecte que realment s'hagi
-  // produït en aquesta referència (pot haver-se demanat I retirat alhora):
-  // treu de la comanda pendent si es va demanar, i torna a sumar exactament
-  // les unitats retirades si es van retirar. Consultar stock no fa res al servidor.
+  // produït en aquesta referència (pot haver-se demanat, retirat i/o afegit
+  // stock alhora): treu de la comanda pendent si es va demanar, i torna a
+  // sumar/restar exactament les unitats retirades o afegides.
+  // Consultar stock no fa res al servidor.
   window.eliminarFila = function(key){
     var entrada = sessio[key]; if (!entrada || pendents[key]) return;
     pendents[key] = true;
     var tasques = [];
     if (entrada.comptadorAfegir > 0) tasques.push({ accio: 'eliminar', ref: entrada.ref });
     if (entrada.comptadorRetirar > 0) tasques.push({ accio: 'desferRetirar', ref: entrada.ref, quant: entrada.comptadorRetirar });
+    if (entrada.totalAfegitStock > 0) tasques.push({ accio: 'retirar', ref: entrada.ref, quant: entrada.totalAfegitStock });
 
     function seguent(){
       if (!tasques.length){ delete pendents[key]; delete sessio[key]; toast(entrada.ref + ' eliminat'); renderLlista(); return; }
